@@ -142,3 +142,58 @@ def deactivate(area_code, area_name, area_type, in_polygon):
 def activate(area_code, area_name, area_type, in_polygon):
     click.echo("RefGeo : activating areas...")
     change_area_activation_status(area_code, area_name, area_type, in_polygon, True)
+
+
+@ref_geo.command(help="Delete geographical data")
+@click.option("--area-code", "-a", multiple=True, help="Areas' code to delete")
+@click.option("--area-name", "-n", multiple=True, help="Areas' name to delete")
+@click.option("--area-type-code", "-t", multiple=True, help="Areas' type to delete")
+@click.option(
+    "--in-polygon",
+    "-i",
+    help="Indicate a polygon in which areas will be deleted. Must be in WKT format (SRID 4326)",
+)
+@click.option(
+    "--out-polygon",
+    "-o",
+    help="Indicate a polygon in which areas will be kept. Must be in WKT format (SRID 4326)",
+)
+@with_appcontext
+def delete(area_code, area_name, area_type_code, in_polygon, out_polygon):
+    where_clauses = []
+    if area_code:
+        where_clauses += [LAreas.area_code.in_(area_code)]
+    if area_name:
+        where_clauses += [LAreas.area_name.in_(area_name)]
+    if area_type_code:
+        where_clauses += [LAreas.area_type.has(BibAreasTypes.type_code.in_(area_type_code))]
+    if in_polygon:
+        where_clauses += [
+            func.ST_Intersects(LAreas.geom_4326, func.ST_GeomFromText(in_polygon, 4326))
+        ]
+    if out_polygon:
+        where_clauses += [
+            sa.not_(func.ST_Intersects(LAreas.geom_4326, func.ST_GeomFromText(out_polygon, 4326)))
+        ]
+    if not where_clauses:
+        raise click.UsageError("No filters provided, refusing to remove ALL areas!")
+    stmt = (
+        select(
+            BibAreasTypes,
+            func.count(LAreas.id_area).label("count"),
+        )
+        .join(LAreas, sa.and_(BibAreasTypes.id_type == LAreas.id_type, *where_clauses))
+        .group_by(BibAreasTypes.id_type)
+        .order_by(BibAreasTypes.type_code)
+    )
+    click.echo("Your filters matched this number of areas:")
+    for area_type, count in db.session.execute(stmt).all():
+        click.echo(f"  {area_type.type_code:5s} {count}")
+    click.confirm("Continue?", abort=True)
+    rowcount = db.session.execute(
+        sa.delete(LAreas)
+        .where(sa.and_(*where_clauses))
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    click.confirm(f"{rowcount} areas have been deleted, commit?", abort=True)
+    db.session.commit()
