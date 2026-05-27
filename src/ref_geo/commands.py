@@ -15,15 +15,39 @@ def ref_geo():
 @ref_geo.command()
 @with_appcontext
 def info():
-    click.echo("RefGeo : nombre de zones par type")
-    q = (
-        select(BibAreasTypes, func.count(LAreas.id_area).label("count"))
+    click.echo("RefGeo - type de zonages")
+    stmt = (
+        select(
+            BibAreasTypes,
+            func.count(LAreas.id_area).label("count"),
+            func.count(LAreas.id_area).filter(LAreas.enable.is_(True)).label("count_enabled"),
+            func.min(LAreas.meta_create_date).label("create_date_min"),
+            func.max(LAreas.meta_create_date).label("create_date_max"),
+        )
         .join(LAreas)
         .group_by(BibAreasTypes.id_type)
-        .order_by(BibAreasTypes.id_type)
+        .order_by(BibAreasTypes.type_code)
     )
-    for area_type, count in db.session.scalars(q).unique().all():
-        click.echo("\t{}: {}".format(area_type.type_name, count))
+    fmt1 = "  {:5s} {:20s} {:>17s}    {:>10s}    {}"
+    fmt2 = "  {:5s} {:20s} {:17d}    {:10d}    {:%Y-%m-%d} - {:%Y-%m-%d}"
+    click.echo(
+        fmt1.format(
+            "code", "description", "nombre de zonages", "activés", "date de création des zonages"
+        )
+    )
+    for area_type, count, count_enabled, create_date_min, create_date_max in db.session.execute(
+        stmt
+    ).all():
+        click.echo(
+            fmt2.format(
+                area_type.type_code,
+                area_type.type_name,
+                count,
+                count_enabled,
+                create_date_min,
+                create_date_max,
+            )
+        )
 
 
 def change_area_activation_status(
