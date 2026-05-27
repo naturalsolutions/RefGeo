@@ -286,3 +286,83 @@ def grids(kind, version, enable):
     drop_temporary_grids_table(db.session, schema, kind.temp_table_name)
     click.echo("Committing…")
     db.session.commit()
+
+
+@ref_geo_import.command()
+@click.option("--version", type=click.Choice(["2026-05"]), default="2026-05")
+@click.option("--enable/--disable", default=True)
+@with_appcontext
+def epci(version, enable):
+    schema = "ref_geo"
+    filename = f"epci_fr_{version}.csv.xz"
+    base_url = "http://geonature.fr/data/ign/"
+    temp_table_name = "temp_fr_epci"
+    click.echo("Ensure EPCI type exists in bib_areas_types…")
+    epci_type = db.session.execute(
+        select(BibAreasTypes).where(BibAreasTypes.type_code == "EPCI")
+    ).scalar_one_or_none()
+    if not epci_type:
+        with db.session.begin_nested():
+            epci_type = BibAreasTypes(
+                type_code="EPCI",
+                type_name="Établissement public de coopération intercommunale",
+            )
+            db.session.add(epci_type)
+        click.echo(f"EPCI type created (id_type={epci_type.id_type})")
+
+    epci_count = db.session.execute(
+        sa.select(sa.func.count(LAreas.id_area)).where(LAreas.id_type == epci_type.id_type)
+    ).scalar()
+    if epci_count:
+        click.confirm(
+            f"There are already {epci_count} existing EPCI, are you sure you want to continue?",
+            abort=True,
+        )
+
+    click.echo("Update EPCI type referential name & version")
+    with db.session.begin_nested():
+        epci_type.ref_name = "IGN admin_express"
+        epci_type.num_version = version
+
+    click.echo("Create temporary EPCI table…")
+    db.session.execute(f"""
+        CREATE TABLE {schema}.{temp_table_name} (
+            WKT public.geometry(MultiPolygon,2154),
+            fid integer NOT NULL,
+            cleabs text,
+            nom_officiel text,
+            nom_officiel_en_majuscules text,
+            nature text,
+            codes_insee_des_communes_membres text,
+            codes_insee_des_departements_membres text,
+            code_siren text
+        )
+    """)
+    db.session.execute(f"""
+        ALTER TABLE ONLY {schema}.{temp_table_name}
+            ADD CONSTRAINT {temp_table_name}_pkey PRIMARY KEY (fid)
+    """)
+    with open_remote_file(base_url, filename) as csvfile:
+        click.echo("Inserting EPCI data in temporary table…")
+        db.session.connection().connection.cursor().copy_expert(
+            f"COPY {schema}.{temp_table_name} FROM STDIN DELIMITER ',' CSV HEADER", csvfile
+        )
+    click.echo(f"Insert EPCI in l_areas…")
+    rowcount = db.session.execute(f"""
+        INSERT INTO {schema}.l_areas (id_type, area_code, area_name, geom, geom_4326, enable)
+        SELECT
+            {epci_type.id_type},
+            code_siren,
+            nom_officiel,
+            ST_Transform(WKT, Find_SRID('{schema}', 'l_areas', 'geom')),
+            ST_Transform(WKT, 4326),
+            {str(enable).upper()}
+        FROM {schema}.{temp_table_name}
+    """).rowcount
+    click.echo("Re-indexing…")
+    # TODO: may be use codes_insee_des_communes_membres & codes_insee_des_departements_membres to populate cor_areas
+    db.session.execute(f"REINDEX INDEX {schema}.index_l_areas_geom")
+    click.echo("Dropping temporary EPCI table…")
+    db.session.execute(f"DROP TABLE {schema}.{temp_table_name}")
+    click.echo("Committing…")
+    db.session.commit()
