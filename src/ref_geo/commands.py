@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import click
 from flask.cli import with_appcontext
 from sqlalchemy import func, select
@@ -5,6 +6,13 @@ import sqlalchemy as sa
 
 from ref_geo.env import db
 from ref_geo.models import BibAreasTypes, LAreas
+from ref_geo.utils import (
+    create_temporary_grids_table,
+    insert_areas_from_temporary_table,
+    insert_grids_from_temporary_table,
+    drop_temporary_grids_table,
+)
+from utils_flask_sqla.utils import open_remote_file
 
 
 @click.group(help="Manage geographical referential.")
@@ -196,4 +204,85 @@ def delete(area_code, area_name, area_type_code, in_polygon, out_polygon):
         .execution_options(synchronize_session=False)
     ).rowcount
     click.confirm(f"{rowcount} areas have been deleted, commit?", abort=True)
+    db.session.commit()
+
+
+@ref_geo.group(name="import", help="Import geographical data")
+def ref_geo_import():
+    pass
+
+
+GRIDS = {
+    "m1": {
+        "filename": "inpn_grids_1.csv.xz",
+        "temp_table_name": "temp_grids_1",
+        "area_type": "M1",
+        "versions": ["2020"],
+    },
+    "m2": {
+        "filename": "inpn_grids_2.csv.xz",
+        "temp_table_name": "temp_grids_2",
+        "area_type": "M2",
+        "versions": ["2024"],
+    },
+    "m5": {
+        "filename": "inpn_grids_5.csv.xz",
+        "temp_table_name": "temp_grids_5",
+        "area_type": "M5",
+        "versions": ["2020"],
+    },
+    "m10": {
+        "filename": "inpn_grids_10.csv.xz",
+        "temp_table_name": "temp_grids_10",
+        "area_type": "M10",
+        "versions": ["2020"],
+    },
+    "m20": {
+        "filename": "inpn_grids_20.csv.xz",
+        "temp_table_name": "temp_grids_20",
+        "area_type": "M20",
+        "versions": ["2024"],
+    },
+    "m50": {
+        "filename": "inpn_grids_50.csv.xz",
+        "temp_table_name": "temp_grids_50",
+        "area_type": "M50",
+        "versions": ["2024"],
+    },
+}
+
+
+@ref_geo_import.command()
+@click.option(
+    "--kind", type=click.Choice(["m1", "m2", "m5", "m10", "m20", "m50"], case_sensitive=False)
+)
+@click.option("--version")
+@click.option("--enable/--disable", default=True)
+@with_appcontext
+def inpn_grids(kind, version, enable):
+    schema = "ref_geo"
+    kind = SimpleNamespace(**GRIDS[kind])
+    if version is None:
+        version = sorted(kind.versions)[-1]
+        click.echo(f"Selecting version '{version}'")
+    if version not in kind.versions:
+        raise click.BadParameter(
+            f"This referential exists only in following versions: {kind.versions}"
+        )
+    base_url = f"http://geonature.fr/data/inpn/layers/{version}/"
+
+    click.echo("Create temporary grids table…")
+    create_temporary_grids_table(db.session, schema, kind.temp_table_name)
+    cursor = db.session.connection().connection.cursor()
+    with open_remote_file(base_url, kind.filename) as geofile:
+        click.echo("Inserting grids data in temporary table…")
+        cursor.copy_expert(f"COPY {schema}.{kind.temp_table_name} FROM STDIN", geofile)
+    click.echo("Copy grids in l_areas…")
+    insert_areas_from_temporary_table(
+        db.session, schema, kind.temp_table_name, kind.area_type, enable
+    )
+    insert_grids_from_temporary_table(db.session, schema, kind.temp_table_name)
+    click.echo("Dropping temporary grids table…")
+    drop_temporary_grids_table(db.session, schema, kind.temp_table_name)
+    click.echo("Committing…")
     db.session.commit()
