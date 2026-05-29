@@ -1,3 +1,11 @@
+# Fredon
+
+- [ ] [EPCI](https://github.com/PnX-SI/RefGeo/pull/47)
+
+Modules
+
+- [Utils-Flask-SQLAlchemy](https://gitlab.com/natural-solutions/geonature/fredon_bretagne/utils-flask-sqlalchemy)
+
 # Référentiel géographique
 
 Prérequis : vous devez installer l’extension PostGIS dans votre base de données.
