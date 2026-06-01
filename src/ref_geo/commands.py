@@ -14,6 +14,8 @@ from ref_geo.utils import (
 )
 from utils_flask_sqla.utils import open_remote_file
 
+BASE_URL = "https://geonature.fr/data/"
+
 
 @click.group(help="Manage geographical referential.")
 def ref_geo():
@@ -254,12 +256,15 @@ GRIDS = {
 
 @ref_geo_import.command()
 @click.option(
-    "--kind", type=click.Choice(["m1", "m2", "m5", "m10", "m20", "m50"], case_sensitive=False)
+    "--kind",
+    type=click.Choice(["m1", "m2", "m5", "m10", "m20", "m50"], case_sensitive=False),
+    required=True,
 )
 @click.option("--version")
 @click.option("--enable/--disable", default=True)
+@click.option("--base-url", default=f"{BASE_URL}inpn/layers/")
 @with_appcontext
-def inpn_grids(kind, version, enable):
+def inpn_grids(kind, version, enable, base_url):
     schema = "ref_geo"
     kind = SimpleNamespace(**GRIDS[kind])
     if version is None:
@@ -269,7 +274,7 @@ def inpn_grids(kind, version, enable):
         raise click.BadParameter(
             f"This referential exists only in following versions: {kind.versions}"
         )
-    base_url = f"http://geonature.fr/data/inpn/layers/{version}/"
+    base_url = f"{base_url}{version}/"
 
     click.echo("Create temporary grids table…")
     create_temporary_grids_table(db.session, schema, kind.temp_table_name)
@@ -289,13 +294,13 @@ def inpn_grids(kind, version, enable):
 
 
 @ref_geo_import.command()
-@click.option("--version", type=click.Choice(["2026-05"]), default="2026-05")
+@click.option("--version", default="2026-05")
 @click.option("--enable/--disable", default=True)
+@click.option("--base-url", default=f"{BASE_URL}ign/")
 @with_appcontext
-def fr_epci(version, enable):
+def fr_epci(version, enable, base_url):
     schema = "ref_geo"
     filename = f"epci_fr_{version}.csv.xz"
-    base_url = "http://geonature.fr/data/ign/"
     temp_table_name = "temp_fr_epci"
     click.echo("Ensure EPCI type exists in bib_areas_types…")
     epci_type = db.session.execute(
