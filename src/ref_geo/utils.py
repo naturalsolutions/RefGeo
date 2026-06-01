@@ -29,10 +29,6 @@ def create_temporary_grids_table(conn, schema, temp_table_name):
     """)
 
 
-def drop_temporary_grids_table(conn, schema, temp_table_name):
-    conn.execute(f"DROP TABLE {schema}.{temp_table_name}")
-
-
 def insert_areas_from_temporary_table(conn, schema, temp_table_name, area_type, enable=True):
     # We insert geom and geom_4326 to avoid double conversion like 2154 → 3312 → 4326
     conn.execute(f"""

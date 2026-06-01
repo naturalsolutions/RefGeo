@@ -10,7 +10,6 @@ from ref_geo.utils import (
     create_temporary_grids_table,
     insert_areas_from_temporary_table,
     insert_grids_from_temporary_table,
-    drop_temporary_grids_table,
 )
 from utils_flask_sqla.utils import open_remote_file
 
@@ -299,7 +298,7 @@ def inpn_grids(kind, version, enable, base_url):
     )
     insert_grids_from_temporary_table(db.session, schema, kind.temp_table_name)
     click.echo("Dropping temporary grids table…")
-    drop_temporary_grids_table(db.session, schema, kind.temp_table_name)
+    db.session.execute(f"DROP TABLE {schema}.{kind.temp_table_name}")
     click.echo("Committing…")
     db.session.commit()
 

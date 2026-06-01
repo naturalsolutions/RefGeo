@@ -41,11 +41,6 @@ def create_temporary_grids_table(schema, temp_table_name):
     utils.create_temporary_grids_table(op.get_bind(), schema, temp_table_name)
 
 
-def drop_temporary_grids_table(schema, temp_table_name):
-    logger.info("Dropping temporary grids table…")
-    utils.drop_temporary_grids_table(op.get_bind(), schema, temp_table_name)
-
-
 def insert_areas_from_temporary_table(schema, temp_table_name, area_type):
     logger.info("Copy grids in l_areas…")
     if geom_4326_exists():
@@ -73,4 +68,5 @@ def insert_grids_from_temporary_table(schema, temp_table_name):
 def insert_grids_and_drop_temporary_table(schema, temp_table_name, area_type):
     insert_areas_from_temporary_table(schema, temp_table_name, area_type)
     insert_grids_from_temporary_table(schema, temp_table_name)
-    drop_temporary_grids_table(schema, temp_table_name)
+    logger.info("Dropping temporary grids table…")
+    op.get_bind().execute(f"DROP TABLE {schema}.{temp_table_name}")
