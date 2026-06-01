@@ -276,6 +276,17 @@ def inpn_grids(kind, version, enable, base_url):
         )
     base_url = f"{base_url}{version}/"
 
+    grids_count = db.session.execute(
+        sa.select(sa.func.count(LAreas.id_area)).where(
+            LAreas.area_type.has(BibAreasTypes.type_code == kind.area_type)
+        )
+    ).scalar()
+    if grids_count:
+        click.confirm(
+            f"There are already {grids_count} existing grids, are you sure you want to continue?",
+            abort=True,
+        )
+
     click.echo("Create temporary grids table…")
     create_temporary_grids_table(db.session, schema, kind.temp_table_name)
     cursor = db.session.connection().connection.cursor()
