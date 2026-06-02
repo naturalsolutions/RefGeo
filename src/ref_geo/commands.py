@@ -59,98 +59,141 @@ def info():
         )
 
 
-def change_area_activation_status(
-    area_code=None, area_name=None, area_type=None, in_polygon=None, enable=True
+def compute_where_clause(
+    *where_clauses,
+    area_code=None,
+    area_name=None,
+    area_type_code=None,
+    in_polygon=None,
+    out_polygon=None,
+    confirm=True,
 ):
     """
-    Change the activation status of areas in the geographical referential.
+    Generate a filter to match a subset of areas of the geographical referential.
+    Filters are cumulative (areas must match all filters).
 
     Parameters
     ----------
+    *where_clauses: list of where clauses
+        List of additionnal where clauses
     area_code : list of str
-        List of area codes to activate or deactivate.
+        List of area codes to match.
     area_name : list of str
-        List of area names to activate or deactivate.
-    area_type : list of str
+        List of area names to match.
+    area_type_code : list of str
         List of area types to activate or deactivate. The type codes are
         checked in the `bib_areas_types` table.
     in_polygon : str
         WKT polygon defined in WGS84 coordinate reference system. The
-        areas inside the polygon will be activated or deactivated.
-    enable : bool
-        If True, the areas will be activated, otherwise they will be
-        deactivated.
+        areas inside the polygon will match.
+    out_polygon : str
+        WKT polygon defined in WGS84 coordinate reference system. The
+        areas outside the polygon will match.
+    confirm : bool
+        If True, a summary of matched obs will be displayed and the user is asked to continue.
     """
-    str_ = "activated" if enable else "deactivated"
+
+    where_clauses = list(where_clauses)
     if area_code:
-        click.echo("The following area codes will be {}: {}".format(str_, ", ".join(area_code)))
-        q = sa.update(LAreas).where(LAreas.area_code.in_(area_code)).values(enable=enable)
-        db.session.execute(q)
+        where_clauses += [LAreas.area_code.in_(area_code)]
     if area_name:
-        click.echo("The following area names will be {}: {}".format(str_, ", ".join(area_name)))
-        q = sa.update(LAreas).where(LAreas.area_name.in_(area_name)).values(enable=enable)
-        db.session.execute(q)
-    if area_type:
-        click.echo("The following area types will be {}: {}".format(str_, ", ".join(area_type)))
-        area_type_ids = db.session.scalars(
-            select(BibAreasTypes.id_type).where(BibAreasTypes.type_code.in_(area_type))
-        ).all()
-        q = sa.update(LAreas).where(LAreas.id_type.in_(area_type_ids)).values(enable=enable)
-        db.session.execute(q)
+        where_clauses += [LAreas.area_name.in_(area_name)]
+    if area_type_code:
+        where_clauses += [LAreas.area_type.has(BibAreasTypes.type_code.in_(area_type_code))]
     if in_polygon:
-        click.echo(
-            "The following areas will be {} in the following polygon: {}".format(str_, in_polygon)
+        where_clauses += [
+            func.ST_Intersects(LAreas.geom_4326, func.ST_GeomFromText(in_polygon, 4326))
+        ]
+    if out_polygon:
+        where_clauses += [
+            sa.not_(func.ST_Intersects(LAreas.geom_4326, func.ST_GeomFromText(out_polygon, 4326)))
+        ]
+    if not where_clauses:
+        raise click.UsageError("No filters provided!")
+
+    where_clause = sa.and_(*where_clauses)
+
+    if confirm:
+        stmt = (
+            select(
+                BibAreasTypes,
+                func.count(LAreas.id_area).label("count"),
+            )
+            .join(
+                LAreas,
+                sa.and_(BibAreasTypes.id_type == LAreas.id_type, where_clause),
+            )
+            .group_by(BibAreasTypes.id_type)
+            .order_by(BibAreasTypes.type_code)
         )
-        in_polygon_cte = select(
-            LAreas.id_area, func.ST_Intersects(LAreas.geom_4326, func.ST_GeomFromText(in_polygon))
-        ).cte("in_polygon")
-        q = (
-            sa.update(LAreas)
-            .where(in_polygon_cte.c.id_area == LAreas.id_area)
-            .values(enable=enable)
-        )
-        db.session.execute(q)
+        click.echo("Your filters matched this number of areas:")
+        for area_type, count in db.session.execute(stmt).all():
+            click.echo(f"  {area_type.type_code:5s} {count}")
+        click.confirm("Continue?", abort=True)
+
+    return where_clause
+
+
+def change_area_activation_status(where_clause, enable):
+    rowcount = db.session.execute(
+        sa.update(LAreas)
+        .where(where_clause)
+        .where(LAreas.enable != enable)
+        .values(enable=enable)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    click.echo(f"{rowcount} areas have been {'activated' if enable else 'deactivated'}")
     db.session.commit()
 
 
-@ref_geo.command()
+@ref_geo.command(help="Deactivate geographical data")
 @click.option("--area-code", "-a", multiple=True, help="Areas' code to deactivate")
 @click.option("--area-name", "-n", multiple=True, help="Areas' name to deactivate")
 @click.option(
-    "--area-type",
+    "--area-type-code",
     "-t",
     multiple=True,
-    help="Area type to deactivate (check `type_code` in `bib_areas_types` table)",
+    help="Areas’ type to deactivate",
 )
 @click.option(
     "--in-polygon",
     "-p",
     help="Indicate a polygon in which areas will be deactivated. Must be in WKT format (SRID 4326)",
 )
+@click.option(
+    "--out-polygon",
+    "-o",
+    help="Indicate a polygon in which areas will be kept. Must be in WKT format (SRID 4326)",
+)
 @with_appcontext
-def deactivate(area_code, area_name, area_type, in_polygon):
+def deactivate(**kwargs):
     click.echo("RefGeo : deactivating areas...")
-    change_area_activation_status(area_code, area_name, area_type, in_polygon, False)
+    change_area_activation_status(compute_where_clause(**kwargs), False)
 
 
-@ref_geo.command()
+@ref_geo.command(help="Activate geographical data")
 @click.option("--area-code", "-a", multiple=True, help="Areas' code to activate")
 @click.option("--area-name", "-n", multiple=True, help="Areas' name to activate")
 @click.option(
-    "--area-type",
+    "--area-type-code",
     "-t",
     multiple=True,
     help="Area type to activate (check `type_code` in `bib_areas_types` table)",
 )
 @click.option(
     "--in-polygon",
-    "-p",
+    "-i",
     help="Indicate a polygon in which areas will be activated. Must be in WKT format (SRID 4326)",
 )
+@click.option(
+    "--out-polygon",
+    "-o",
+    help="Indicate a polygon in which areas will be kept. Must be in WKT format (SRID 4326)",
+)
 @with_appcontext
-def activate(area_code, area_name, area_type, in_polygon):
+def activate(**kwargs):
     click.echo("RefGeo : activating areas...")
-    change_area_activation_status(area_code, area_name, area_type, in_polygon, True)
+    change_area_activation_status(compute_where_clause(**kwargs), True)
 
 
 @ref_geo.command(help="Delete geographical data")
@@ -168,40 +211,11 @@ def activate(area_code, area_name, area_type, in_polygon):
     help="Indicate a polygon in which areas will be kept. Must be in WKT format (SRID 4326)",
 )
 @with_appcontext
-def delete(area_code, area_name, area_type_code, in_polygon, out_polygon):
-    where_clauses = []
-    if area_code:
-        where_clauses += [LAreas.area_code.in_(area_code)]
-    if area_name:
-        where_clauses += [LAreas.area_name.in_(area_name)]
-    if area_type_code:
-        where_clauses += [LAreas.area_type.has(BibAreasTypes.type_code.in_(area_type_code))]
-    if in_polygon:
-        where_clauses += [
-            func.ST_Intersects(LAreas.geom_4326, func.ST_GeomFromText(in_polygon, 4326))
-        ]
-    if out_polygon:
-        where_clauses += [
-            sa.not_(func.ST_Intersects(LAreas.geom_4326, func.ST_GeomFromText(out_polygon, 4326)))
-        ]
-    if not where_clauses:
-        raise click.UsageError("No filters provided, refusing to remove ALL areas!")
-    stmt = (
-        select(
-            BibAreasTypes,
-            func.count(LAreas.id_area).label("count"),
-        )
-        .join(LAreas, sa.and_(BibAreasTypes.id_type == LAreas.id_type, *where_clauses))
-        .group_by(BibAreasTypes.id_type)
-        .order_by(BibAreasTypes.type_code)
-    )
-    click.echo("Your filters matched this number of areas:")
-    for area_type, count in db.session.execute(stmt).all():
-        click.echo(f"  {area_type.type_code:5s} {count}")
-    click.confirm("Continue?", abort=True)
+def delete(**kwargs):
+
     rowcount = db.session.execute(
         sa.delete(LAreas)
-        .where(sa.and_(*where_clauses))
+        .where(compute_where_clause(**kwargs))
         .execution_options(synchronize_session=False)
     ).rowcount
     click.confirm(f"{rowcount} areas have been deleted, commit?", abort=True)
